@@ -514,7 +514,7 @@ msg_info "Getting URL for immortalwrt Disk Image"
 
 response=$(curl -fsSL https://immortalwrt.kyarucloud.moe/)
 stableversion=$(echo "$response" | sed -n 's#.*releases/\([0-9.]\+\)/.*#\1#p' | head -n 1)
-URL="https://immortalwrt.kyarucloud.moe/releases/$stableversion/targets/x86/64/generic-ext4-combined.img.gz"
+URL="https://immortalwrt.kyarucloud.moe/releases/$stableversion/targets/x86/64/immortalwrt-/$stableversion/-x86-64-generic-ext4-combined.img.gz"
 
 msg_ok "${CL}${BL}${URL}${CL}"
 curl -f#SL -o "$(basename "$URL")" "$URL"
