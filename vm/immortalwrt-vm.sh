@@ -267,7 +267,7 @@ function exit-script() {
 
 function default_settings() {
   VMID=$(get_valid_nextid)
-  HN="openwrt"
+  HN="immortwrt"
   CORE_COUNT="1"
   RAM_SIZE="256"
   BRG="vmbr0"
