@@ -12,6 +12,7 @@ var_ram="${var_ram:-6144}"
 var_disk="${var_disk:-20}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"
@@ -28,71 +29,87 @@ function update_script() {
     exit
   fi
 
-  VAULT=$(curl -fsSL https://api.github.com/repos/dani-garcia/vaultwarden/releases/latest |
-    grep "tag_name" |
-    awk '{print substr($2, 2, length($2)-3) }')
-  WVRELEASE=$(curl -fsSL https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest |
-    grep "tag_name" |
-    awk '{print substr($2, 2, length($2)-3) }')
+  VAULT=$(get_latest_github_release "dani-garcia/vaultwarden")
+  WVRELEASE=$(get_latest_github_release "dani-garcia/bw_web_builds")
 
-  UPD=$(whiptail --backtitle "Proxmox VE Helper Scripts" --title "SUPPORT" --radiolist --cancel-button Exit-Script "Spacebar = Select" 11 58 3 \
-    "1" "VaultWarden $VAULT" ON \
-    "2" "Web-Vault $WVRELEASE" OFF \
-    "3" "Set Admin Token" OFF \
-    3>&1 1>&2 2>&3)
+  UPD=$(msg_menu "Vaultwarden Update Options" \
+    "1" "Update VaultWarden + Web-Vault" \
+    "2" "Set Admin Token")
 
   if [ "$UPD" == "1" ]; then
-    msg_info "Stopping Service"
-    systemctl stop vaultwarden
-    msg_ok "Stopped Service"
-
-    msg_info "Updating VaultWarden to $VAULT (Patience)"
-    cd ~ && rm -rf vaultwarden
-    $STD git clone https://github.com/dani-garcia/vaultwarden
-    cd vaultwarden
-    $STD cargo build --features "sqlite,mysql,postgresql" --release
-    DIR=/usr/bin/vaultwarden
-    if [ -d "$DIR" ]; then
-      cp target/release/vaultwarden /usr/bin/
-    else
-      cp target/release/vaultwarden /opt/vaultwarden/bin/
+    INSTALLED_VERSION="$(/opt/vaultwarden/bin/vaultwarden --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+    if [[ -n "$INSTALLED_VERSION" ]] &&
+      ! grep -qxF "$INSTALLED_VERSION" "$HOME/.vaultwarden" 2>/dev/null; then
+      printf '%s\n' "$INSTALLED_VERSION" >"$HOME/.vaultwarden"
     fi
-    cd ~ && rm -rf vaultwarden
-    msg_ok "Updated VaultWarden"
+    if check_for_gh_release "vaultwarden" "dani-garcia/vaultwarden"; then
+      msg_info "Stopping Service"
+      systemctl stop vaultwarden
+      msg_ok "Stopped Service"
 
-    msg_info "Starting Service"
-    systemctl start vaultwarden
-    msg_ok "Started Service"
+      fetch_and_deploy_gh_release "vaultwarden" "dani-garcia/vaultwarden" "tarball" "latest" "/tmp/vaultwarden-src"
+
+      msg_info "Updating VaultWarden to $VAULT (Patience)"
+      cd /tmp/vaultwarden-src
+      VW_VERSION="$VAULT"
+      export VW_VERSION
+      $STD cargo build --features "sqlite,mysql,postgresql" --release
+      if [[ -f /usr/bin/vaultwarden ]]; then
+        cp target/release/vaultwarden /usr/bin/
+      else
+        cp target/release/vaultwarden /opt/vaultwarden/bin/
+      fi
+      cd ~ && rm -rf /tmp/vaultwarden-src
+      msg_ok "Updated VaultWarden to ${VAULT}"
+
+      msg_info "Starting Service"
+      systemctl start vaultwarden
+      msg_ok "Started Service"
+    else
+      msg_ok "VaultWarden is already up-to-date"
+    fi
+
+    if check_for_gh_release "vaultwarden_webvault" "dani-garcia/bw_web_builds"; then
+      msg_info "Stopping Service"
+      systemctl stop vaultwarden
+      msg_ok "Stopped Service"
+
+      msg_info "Updating Web-Vault to $WVRELEASE"
+      rm -rf /opt/vaultwarden/web-vault
+      mkdir -p /opt/vaultwarden/web-vault
+
+      fetch_and_deploy_gh_release "vaultwarden_webvault" "dani-garcia/bw_web_builds" "prebuild" "latest" "/opt/vaultwarden/web-vault" "bw_web_*.tar.gz"
+
+      chown -R root:root /opt/vaultwarden/web-vault/
+      msg_ok "Updated Web-Vault to ${WVRELEASE}"
+
+      msg_info "Starting Service"
+      systemctl start vaultwarden
+      msg_ok "Started Service"
+    else
+      msg_ok "Web-Vault is already up-to-date"
+    fi
+
     msg_ok "Updated successfully!"
     exit
   fi
+
   if [ "$UPD" == "2" ]; then
-    msg_info "Stopping Service"
-    systemctl stop vaultwarden
-    msg_ok "Stopped Service"
-
-    msg_info "Updating Web-Vault to $WVRELEASE"
-    $STD curl -fsSLO https://github.com/dani-garcia/bw_web_builds/releases/download/"$WVRELEASE"/bw_web_"$WVRELEASE".tar.gz
-    $STD tar -zxf bw_web_"$WVRELEASE".tar.gz -C /opt/vaultwarden/
-    rm bw_web_"$WVRELEASE".tar.gz
-    msg_ok "Updated Web-Vault"
-
-    msg_info "Starting Service"
-    systemctl start vaultwarden
-    msg_ok "Started Service"
-    msg_ok "Updated successfully!"
-    exit
-  fi
-  if [ "$UPD" == "3" ]; then
-    if NEWTOKEN=$(whiptail --backtitle "Proxmox VE Helper Scripts" --passwordbox "Set the ADMIN_TOKEN" 10 58 3>&1 1>&2 2>&3); then
-      if [[ -z "$NEWTOKEN" ]]; then exit; fi
-      if ! command -v argon2 >/dev/null 2>&1; then $STD apt-get install -y argon2; fi
+    if [[ "${PHS_SILENT:-0}" == "1" ]]; then
+      msg_warn "Set Admin Token requires interactive mode, skipping."
+      exit
+    fi
+    read -r -s -p "Set the ADMIN_TOKEN: " NEWTOKEN
+    echo ""
+    if [[ -n "$NEWTOKEN" ]]; then
+      ensure_dependencies argon2
       TOKEN=$(echo -n "${NEWTOKEN}" | argon2 "$(openssl rand -base64 32)" -t 2 -m 16 -p 4 -l 64 -e)
       sed -i "s|ADMIN_TOKEN=.*|ADMIN_TOKEN='${TOKEN}'|" /opt/vaultwarden/.env
       if [[ -f /opt/vaultwarden/data/config.json ]]; then
         sed -i "s|\"admin_token\":.*|\"admin_token\": \"${TOKEN}\"|" /opt/vaultwarden/data/config.json
       fi
       systemctl restart vaultwarden
+      msg_ok "Admin token updated"
     fi
     exit
   fi
@@ -104,5 +121,5 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}https://${IP}:8000${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}https://${IP}:8000${CL}"

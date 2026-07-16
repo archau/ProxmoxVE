@@ -3,7 +3,7 @@
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: jkrgr0
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://docs.2fauth.app/
+# Source: https://docs.2fauth.app/ | Github: https://github.com/Bubka/2FAuth
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -17,7 +17,8 @@ msg_info "Installing Dependencies"
 $STD apt install -y nginx
 msg_ok "Installed Dependencies"
 
-PHP_VERSION="8.4" PHP_MODULE="common,ctype,fileinfo,mysql,tokenizer,dom,redis" PHP_FPM="YES" setup_php
+export PHP_VERSION="8.4"
+PHP_FPM="YES" setup_php
 setup_composer
 setup_mariadb
 MARIADB_DB_NAME="2fauth_db" MARIADB_DB_USER="2fauth" setup_mariadb_db
@@ -42,6 +43,7 @@ $STD php artisan migrate:refresh
 $STD php artisan passport:install -q -n
 $STD php artisan storage:link
 $STD php artisan config:cache
+$STD php artisan 2fauth:fix-passport-key-permissions
 chown -R www-data: /opt/2fauth
 chmod -R 755 /opt/2fauth
 msg_ok "Setup 2fauth"

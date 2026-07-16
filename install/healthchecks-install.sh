@@ -2,7 +2,7 @@
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (Canbiz)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://healthchecks.io/
+# Source: https://healthchecks.io/ | Github: https://github.com/healthchecks/healthchecks
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -14,17 +14,17 @@ update_os
 
 msg_info "Installing Dependencies"
 $STD apt install -y \
-  gcc \
-  python3 \
-  python3-dev \
-  python3-venv \
-  libpq-dev \
-  libcurl4-openssl-dev \
-  libssl-dev \
-  caddy
+    gcc \
+    python3 \
+    python3-dev \
+    python3-venv \
+    libpq-dev \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    caddy
 
 mkdir -p ~/.config/pip
-cat > ~/.config/pip/pip.conf << EOF
+cat >~/.config/pip/pip.conf <<EOF
 [global]
 break-system-packages = true
 EOF
@@ -35,12 +35,12 @@ PG_DB_NAME="healthchecks_db" PG_DB_USER="hc_user" PG_DB_PASS=$(openssl rand -bas
 
 msg_info "Setup Keys (Admin / Secret)"
 SECRET_KEY="$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | cut -c1-32)"
-ADMIN_EMAIL="admin@helper-scripts.local"
+ADMIN_EMAIL="admin@community-scripts.org"
 ADMIN_PASSWORD="$PG_DB_PASS"
-{
-  echo "healthchecks Admin Email: $ADMIN_EMAIL"
-  echo "healthchecks Admin Password: $ADMIN_PASSWORD"
-} >>~/healthchecks.creds
+cat <<EOF >~/healthchecks.creds
+healthchecks Admin Email: $ADMIN_EMAIL
+healthchecks Admin Password: $ADMIN_PASSWORD
+EOF
 msg_ok "Set up Keys"
 
 fetch_and_deploy_gh_release "healthchecks" "healthchecks/healthchecks" "tarball"
@@ -108,7 +108,7 @@ ${LOCAL_IP} {
 EOF
 msg_ok "Configured Caddy"
 
-msg_info "Creating systemd service"
+msg_info "Creating systemd services"
 cat <<EOF >/etc/systemd/system/healthchecks.service
 [Unit]
 Description=Healthchecks Service
@@ -123,9 +123,23 @@ Restart=always
 WantedBy=multi-user.target
 EOF
 
-systemctl enable -q --now healthchecks caddy
+cat <<EOF >/etc/systemd/system/healthchecks-sendalerts.service
+[Unit]
+Description=Healthchecks Sendalerts Service
+After=network.target postgresql.service healthchecks.service
+
+[Service]
+WorkingDirectory=/opt/healthchecks/
+ExecStart=/opt/healthchecks/venv/bin/python manage.py sendalerts
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl enable -q --now healthchecks healthchecks-sendalerts caddy
 systemctl reload caddy
-msg_ok "Created Service"
+msg_ok "Created Services"
 
 motd_ssh
 customize

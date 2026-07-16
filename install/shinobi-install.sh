@@ -35,7 +35,7 @@ cd Shinobi
 gitVersionNumber=$(git rev-parse HEAD)
 theDateRightNow=$(date)
 touch version.json
-chmod 777 version.json
+chmod 644 version.json
 echo '{"Product" : "'"Shinobi"'" , "Branch" : "'"master"'" , "Version" : "'"$gitVersionNumber"'" , "Date" : "'"$theDateRightNow"'" , "Repository" : "'"https://gitlab.com/Shinobi-Systems/Shinobi.git"'"}' >version.json
 msg_ok "Cloned Shinobi"
 
@@ -54,7 +54,7 @@ cronKey=$(head -c 1024 </dev/urandom | sha256sum | awk '{print substr($1,1,29)}'
 sed -i -e 's/Shinobi/'"$cronKey"'/g' conf.json
 cp super.sample.json super.json
 $STD npm i npm -g
-$STD npm install --unsafe-perm
+$STD npm install
 $STD npm install pm2@latest -g
 chmod -R 755 .
 touch INSTALL/installed.txt

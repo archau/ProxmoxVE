@@ -12,6 +12,7 @@ var_ram="${var_ram:-1024}"
 var_disk="${var_disk:-4}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"
@@ -27,10 +28,7 @@ function update_script() {
     msg_error "No ${APP} Installation Found!"
     exit
   fi
-  if ! [[ $(dpkg -s zstd 2>/dev/null) ]]; then
-    $STD apt update
-    $STD apt install -y zstd
-  fi
+  ensure_dependencies zstd
   RELEASE=$(curl -fsSL https://api.github.com/repos/matze/wastebin/releases/latest | grep "tag_name" | awk '{print substr($2, 2, length($2)-3) }')
   # Dirty-Fix 03/2025 for missing APP_version.txt on old installations, set to pre-latest release
   msg_info "Running Migration"
@@ -68,7 +66,7 @@ EOF
 
     msg_info "Updating Wastebin"
     temp_file=$(mktemp)
-    curl -fsSL "https://github.com/matze/wastebin/releases/download/${RELEASE}/wastebin_${RELEASE}_x86_64-unknown-linux-musl.tar.zst" -o "$temp_file"
+    curl -fsSL "https://github.com/matze/wastebin/releases/download/${RELEASE}/wastebin_${RELEASE}_$(arch_resolve "x86_64" "aarch64")-unknown-linux-musl.tar.zst" -o "$temp_file"
     tar -xf "$temp_file"
     cp -f wastebin* /opt/wastebin/
     chmod +x /opt/wastebin/wastebin
@@ -93,5 +91,5 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:8088${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:8088${CL}"

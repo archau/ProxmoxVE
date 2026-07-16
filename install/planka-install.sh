@@ -32,12 +32,12 @@ $STD sudo -u postgres psql -c "CREATE DATABASE $DB_NAME WITH OWNER $DB_USER ENCO
 $STD sudo -u postgres psql -c "ALTER ROLE $DB_USER SET client_encoding TO 'utf8';"
 $STD sudo -u postgres psql -c "ALTER ROLE $DB_USER SET default_transaction_isolation TO 'read committed';"
 $STD sudo -u postgres psql -c "ALTER ROLE $DB_USER SET timezone TO 'UTC'"
-{
-  echo "PLANKA DB Credentials"
-  echo "PLANKA Database User: $DB_USER"
-  echo "PLANKA Database Password: $DB_PASS"
-  echo "PLANKA Database Name: $DB_NAME"
-} >>~/planka.creds
+cat <<EOF >~/planka.creds
+PLANKA DB Credentials
+PLANKA Database User: $DB_USER
+PLANKA Database Password: $DB_PASS
+PLANKA Database Name: $DB_NAME
+EOF
 msg_ok "Set up PostgreSQL Database"
 
 fetch_and_deploy_gh_release "planka" "plankanban/planka" "prebuild" "latest" "/opt/planka" "planka-prebuild.zip"
@@ -50,6 +50,7 @@ cp .env.sample .env
 sed -i "s#http://localhost:1337#http://$LOCAL_IP:1337#g" /opt/planka/.env
 sed -i "s#postgres@localhost#planka:$DB_PASS@localhost#g" /opt/planka/.env
 sed -i "s#notsecretkey#$SECRET_KEY#g" /opt/planka/.env
+mkdir -p /opt/planka/data/protected/{favicons,user-avatars,background-images} /opt/planka/data/private/attachments
 $STD npm run db:init
 msg_ok "Configured PLANKA"
 
@@ -66,14 +67,14 @@ echo "DEFAULT_ADMIN_NAME=$ADMIN_NAME" >>.env
 echo "DEFAULT_ADMIN_USERNAME=$ADMIN_USERNAME" >>.env
 $STD npm run db:seed
 sed -i '/# Temporary admin user creation settings/,$d' .env
-{
-  echo ""
-  echo "PLANKA Admin Credentials"
-  echo "Admin Email: $ADMIN_EMAIL"
-  echo "Admin Password: $ADMIN_PASSWORD"
-  echo "Admin Name: $ADMIN_NAME"
-  echo "Admin Username: $ADMIN_USERNAME"
-} >>~/planka.creds
+cat <<EOF >~/planka.creds
+
+PLANKA Admin Credentials
+Admin Email: $ADMIN_EMAIL
+Admin Password: $ADMIN_PASSWORD
+Admin Name: $ADMIN_NAME
+Admin Username: $ADMIN_USERNAME
+EOF
 msg_ok "Created Admin User"
 
 msg_info "Creating Service"

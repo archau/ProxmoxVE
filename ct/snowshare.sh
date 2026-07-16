@@ -12,6 +12,7 @@ var_ram="${var_ram:-2048}"
 var_disk="${var_disk:-20}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"
@@ -28,12 +29,26 @@ function update_script() {
     exit
   fi
 
+  NODE_VERSION="24" setup_nodejs
+
   if check_for_gh_release "snowshare" "TuroYT/snowshare"; then
     msg_info "Stopping Service"
     systemctl stop snowshare
     msg_ok "Stopped Service"
 
-    fetch_and_deploy_gh_release "snowshare" "TuroYT/snowshare" "tarball"
+    if ! grep -q '^UPLOAD_DIR=' /opt/snowshare.env 2>/dev/null; then
+      msg_info "Migrating uploads to persistent directory"
+      mkdir -p /opt/snowshare_data
+      if [ -d /opt/snowshare/uploads ] && [ -z "$(ls -A /opt/snowshare_data 2>/dev/null)" ]; then
+        mv /opt/snowshare/uploads/* /opt/snowshare_data/ 2>/dev/null || true
+        mv /opt/snowshare/uploads/.[!.]* /opt/snowshare_data/ 2>/dev/null || true
+        rmdir /opt/snowshare/uploads 2>/dev/null || true
+      fi
+      echo "UPLOAD_DIR=/opt/snowshare_data" >>/opt/snowshare.env
+      msg_ok "Migrated uploads to /opt/snowshare_data"
+    fi
+
+    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "snowshare" "TuroYT/snowshare" "tarball"
 
     msg_info "Updating Snowshare"
     cd /opt/snowshare
@@ -56,5 +71,5 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:3000${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:3000${CL}"

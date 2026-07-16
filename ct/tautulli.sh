@@ -3,7 +3,7 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 # Copyright (c) 2021-2026 tteck
 # Author: tteck (tteckster)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://tautulli.com/
+# Source: https://tautulli.com/ | Github: https://github.com/Tautulli/Tautulli
 
 APP="Tautulli"
 var_tags="${var_tags:-media}"
@@ -12,6 +12,7 @@ var_ram="${var_ram:-1024}"
 var_disk="${var_disk:-4}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"
@@ -35,9 +36,10 @@ function update_script() {
     systemctl stop tautulli
     msg_ok "Stopped Service"
 
-    msg_info "Backing up config"
-    cp -r /opt/Tautulli/config /opt/tautulli_config_backup
-    msg_ok "Backed up config"
+    msg_info "Backing up config and database"
+    cp /opt/Tautulli/config.ini /opt/tautulli_config.ini.backup
+    cp /opt/Tautulli/tautulli.db /opt/tautulli.db.backup
+    msg_ok "Backed up config and database"
 
     CLEAN_INSTALL=1 fetch_and_deploy_gh_release "Tautulli" "Tautulli/Tautulli" "tarball"
 
@@ -46,17 +48,18 @@ function update_script() {
     TAUTULLI_VERSION=$(get_latest_github_release "Tautulli/Tautulli" "false")
     echo "${TAUTULLI_VERSION}" >/opt/Tautulli/version.txt
     echo "master" >/opt/Tautulli/branch.txt
-    source /opt/Tautulli/.venv/bin/activate
-    $STD pip install --upgrade uv
-    $STD uv pip install -q -r requirements.txt
-    $STD uv pip install -q pyopenssl
-    deactivate
+    $STD uv venv -c
+    $STD source /opt/Tautulli/.venv/bin/activate
+    $STD uv pip install -r requirements.txt
+    $STD uv pip install pyopenssl
+    $STD uv pip install "setuptools<81"
     msg_ok "Updated Tautulli"
 
-    msg_info "Restoring config"
-    cp -r /opt/tautulli_config_backup/* /opt/Tautulli/config/
-    rm -rf /opt/tautulli_config_backup
-    msg_ok "Restored config"
+    msg_info "Restoring config and database"
+    cp /opt/tautulli_config.ini.backup /opt/Tautulli/config.ini
+    cp /opt/tautulli.db.backup /opt/Tautulli/tautulli.db
+    rm -f /opt/{tautulli_config.ini.backup,tautulli.db.backup}
+    msg_ok "Restored config and database"
 
     msg_info "Starting Service"
     systemctl start tautulli
@@ -72,5 +75,5 @@ description
 
 msg_ok "Completed successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
-echo -e "${INFO}${YW} Access it using the following URL:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:8181${CL}"
+echo -e "${INFO}${YW}Access it using the following URL:${CL}"
+echo -e "${GATEWAY}${BGN}http://${IP}:8181${CL}"

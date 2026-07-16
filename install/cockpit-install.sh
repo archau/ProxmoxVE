@@ -16,7 +16,6 @@ update_os
 
 msg_info "Installing Cockpit"
 source /etc/os-release
-
 cat <<EOF >/etc/apt/sources.list.d/debian-backports.sources
 Types: deb deb-src
 URIs: http://deb.debian.org/debian
@@ -31,7 +30,8 @@ $STD apt install -t ${VERSION_CODENAME}-backports cockpit cracklib-runtime --no-
 sed -i "s/root//g" /etc/cockpit/disallowed-users
 msg_ok "Installed Cockpit"
 
-read -r -p "Would you like to install 45Drives' cockpit-file-sharing, cockpit-identities, and cockpit-navigator  <y/N> " prompt
+# 45Drives only publishes amd64 packages
+[[ "$(arch_resolve)" == "arm64" ]] || read -r -p "Would you like to install 45Drives' cockpit-file-sharing, cockpit-identities, and cockpit-navigator  <y/N> " prompt
 if [[ "${prompt,,}" =~ ^(y|yes)$ ]]; then
   install_45drives=true
   if [[ "${VERSION_ID}" -ge 13 ]]; then
@@ -42,18 +42,13 @@ if [[ "${prompt,,}" =~ ^(y|yes)$ ]]; then
   fi
   if [[ "$install_45drives" == "true" ]]; then
     msg_info "Installing 45Drives' cockpit extensions"
-    curl -fsSL https://repo.45drives.com/key/gpg.asc | gpg --pinentry-mode loopback --batch --yes --dearmor -o /usr/share/keyrings/45drives-archive-keyring.gpg
-    cat <<EOF >/etc/apt/sources.list.d/45drives-enterprise.sources
-Types: deb
-URIs: https://repo.45drives.com/enterprise/debian
-Suites: bookworm
-Components: main
-Architectures: amd64
-Signed-By: /usr/share/keyrings/45drives-archive-keyring.gpg
-EOF
-
-    $STD apt update
-    $STD apt install cockpit-file-sharing cockpit-identities cockpit-navigator -y
+    setup_deb822_repo "45drives" \
+      "https://repo.45drives.com/key/gpg.asc" \
+      "https://repo.45drives.com/enterprise/debian" \
+      "bookworm" \
+      "main" \
+      "amd64"
+    $STD apt install -y cockpit-file-sharing cockpit-identities cockpit-navigator
     msg_ok "Installed 45Drives' cockpit extensions"
   fi
 fi

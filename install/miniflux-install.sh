@@ -3,7 +3,7 @@
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: omernaveedxyz
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://miniflux.app/
+# Source: https://miniflux.app/ | Github: https://github.com/miniflux/v2
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -28,10 +28,10 @@ ADMIN_USERNAME=$ADMIN_NAME
 ADMIN_PASSWORD=$ADMIN_PASS
 LISTEN_ADDR=0.0.0.0:8080
 EOF
-{
-  echo "ADMIN_USERNAME: $ADMIN_NAME"
-  echo "ADMIN_PASSWORD: $ADMIN_PASS"
-} >>~/miniflux.creds
+cat <<EOF >~/miniflux.creds
+ADMIN_USERNAME: $ADMIN_NAME
+ADMIN_PASSWORD: $ADMIN_PASS
+EOF
 $STD miniflux -migrate -config-file /etc/miniflux.conf
 systemctl enable -q --now miniflux
 msg_ok "Configured Miniflux"

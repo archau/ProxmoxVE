@@ -3,7 +3,7 @@
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: rrole
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://wanderer.to
+# Source: https://wanderer.to | Github: https://github.com/open-wanderer/wanderer
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -14,20 +14,30 @@ network_check
 update_os
 
 setup_go
-setup_nodejs
-fetch_and_deploy_gh_release "meilisearch" "meilisearch/meilisearch" "binary" "latest" "/opt/wanderer/source/search"
-mkdir -p /opt/wanderer/{source,data/pb_data,data/meili_data}
-fetch_and_deploy_gh_release "wanderer" "Flomp/wanderer" "tarball" "latest" "/opt/wanderer/source"
+NODE_VERSION="22" setup_nodejs
+if [[ "$(arch_resolve)" == "arm64" ]]; then
+  fetch_and_deploy_gh_release "meilisearch" "meilisearch/meilisearch" "singlefile" "latest" "/usr/local/bin" "meilisearch-linux-aarch64"
+else
+  fetch_and_deploy_gh_release "meilisearch" "meilisearch/meilisearch" "binary" "latest" "/opt/wanderer/source/search"
+fi
+mkdir -p /opt/wanderer/{source,data/pb_data,data/meili_data,data/plugins}
+[[ -e /data/plugins ]] || ln -sfn /opt/wanderer/data/plugins /data/plugins
+fetch_and_deploy_gh_release "wanderer" "open-wanderer/wanderer" "tarball" "latest" "/opt/wanderer/source"
 
 msg_info "Installing wanderer (patience)"
 cd /opt/wanderer/source/db
 $STD go mod tidy
 $STD go build
 cd /opt/wanderer/source/web
-$STD npm ci -s vitest
-$STD npm ci --omit=dev
+$STD npm ci
 $STD npm run build
 msg_ok "Installed wanderer"
+
+msg_info "Installing wanderer plugins"
+for plugin in hammerhead komoot strava; do
+  fetch_and_deploy_gh_release "wanderer-plugin-${plugin}" "open-wanderer/wanderer" "prebuild" "latest" "/opt/wanderer/data/plugins" "wanderer-plugin-${plugin}.tar.gz" || msg_warn "Failed to install wanderer plugin: ${plugin}"
+done
+msg_ok "Installed wanderer plugins"
 
 msg_info "Creating Service"
 MEILI_KEY=$(openssl rand -hex 32)
@@ -58,7 +68,17 @@ cd /opt/wanderer/source/web && node build &
 
 wait -n
 EOF
-chmod +x  /opt/wanderer/start.sh
+chmod +x /opt/wanderer/start.sh
+
+cat <<'EOF' >/usr/local/bin/wanderer-pb
+#!/usr/bin/env bash
+set -a
+source /opt/wanderer/.env
+set +a
+cd /opt/wanderer/source/db
+exec ./pocketbase "$@" --dir="$PB_DB_LOCATION"
+EOF
+chmod +x /usr/local/bin/wanderer-pb
 
 cat <<EOF >/etc/systemd/system/wanderer-web.service
 [Unit]

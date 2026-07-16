@@ -13,7 +13,7 @@ setting_up_container
 network_check
 update_os
 
-PHP_VERSION="8.3" PHP_APACHE="YES" PHP_FPM="YES" PHP_MODULE="imap,ldap,mysql" setup_php
+PHP_VERSION="8.3" PHP_APACHE="YES" PHP_FPM="YES" PHP_MODULE="imap,ldap" setup_php
 setup_mariadb
 
 msg_info "Configuring MariaDB Database"
@@ -23,12 +23,12 @@ DB_PASS=$(openssl rand -base64 18 | tr -dc 'a-zA-Z0-9' | head -c13)
 $STD mariadb -u root -e "CREATE DATABASE $DB_NAME CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 $STD mariadb -u root -e "CREATE USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';"
 $STD mariadb -u root -e "GRANT ALL ON $DB_NAME.* TO '$DB_USER'@'localhost'; FLUSH PRIVILEGES;"
-{
-  echo "LimeSurvey-Credentials"
-  echo "LimeSurvey Database User: $DB_USER"
-  echo "LimeSurvey Database Password: $DB_PASS"
-  echo "LimeSurvey Database Name: $DB_NAME"
-} >>~/limesurvey.creds
+cat <<EOF >~/limesurvey.creds
+LimeSurvey-Credentials
+LimeSurvey Database User: $DB_USER
+LimeSurvey Database Password: $DB_PASS
+LimeSurvey Database Name: $DB_NAME
+EOF
 msg_ok "Configured MariaDB Database"
 
 msg_info "Setting up LimeSurvey"
