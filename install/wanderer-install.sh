@@ -21,8 +21,10 @@ else
   fetch_and_deploy_gh_release "meilisearch" "meilisearch/meilisearch" "binary" "latest" "/opt/wanderer/source/search"
 fi
 mkdir -p /opt/wanderer/{source,data/pb_data,data/meili_data,data/plugins}
-[[ -e /data/plugins ]] || ln -sfn /opt/wanderer/data/plugins /data/plugins
 fetch_and_deploy_gh_release "wanderer" "open-wanderer/wanderer" "tarball" "latest" "/opt/wanderer/source"
+mkdir -p /opt/wanderer/source/db/data
+mkdir -p /opt/wanderer/source/search
+[[ -e /opt/wanderer/source/db/data/plugins ]] || ln -sfn /opt/wanderer/data/plugins /opt/wanderer/source/db/data/plugins
 
 msg_info "Installing wanderer (patience)"
 cd /opt/wanderer/source/db
@@ -61,7 +63,7 @@ cat <<EOF >/opt/wanderer/start.sh
 
 trap "kill 0" EXIT
 
-cd /opt/wanderer/source/search && meilisearch --experimental-dumpless-upgrade --master-key \$MEILI_MASTER_KEY &
+cd /opt/wanderer/source/search && meilisearch --upgrade-db --master-key \$MEILI_MASTER_KEY &
 sleep 1
 cd /opt/wanderer/source/db && ./pocketbase serve --http=\$PB_URL --dir=\$PB_DB_LOCATION &
 cd /opt/wanderer/source/web && node build &
