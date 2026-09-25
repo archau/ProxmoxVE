@@ -632,7 +632,7 @@ is_tool_installed() {
     ;;
   mongodb | mongod)
     if command -v mongod >/dev/null 2>&1; then
-      installed_version=$(mongod --version 2>/dev/null | awk '/db version/{print $3}' | cut -d. -f1,2)
+      installed_version=$(mongod --version 2>/dev/null | awk '/db version/{print $3}' | sed 's/^v//' | cut -d. -f1,2)
     fi
     ;;
   node | nodejs)
@@ -686,6 +686,39 @@ is_tool_installed() {
 }
 
 # ------------------------------------------------------------------------------
+# Checks whether purging the given package glob(s) would also remove packages
+# outside those globs (i.e. reverse dependents, such as an app depending on
+# mongodb-org-server). Uses `apt-get -s` (simulate) with the stable apt-get
+# output format, not `apt`, whose output is explicitly unstable for scripting.
+# Returns 0 (safe to purge) or 1 (unsafe - prints the unexpected packages).
+# Usage: _purge_is_safe 'mongodb*' ['other-glob*' ...]
+# ------------------------------------------------------------------------------
+_purge_is_safe() {
+  local -a globs=("$@")
+  local -a collateral=()
+  local pkg glob matched
+  local sim_out
+  sim_out=$(apt-get -s purge -y "${globs[@]}" 2>/dev/null) || return 0
+  while IFS= read -r pkg; do
+    [[ -z "$pkg" ]] && continue
+    matched=0
+    for glob in "${globs[@]}"; do
+      # shellcheck disable=SC2053
+      [[ "$pkg" == $glob ]] && {
+        matched=1
+        break
+      }
+    done
+    ((matched)) || collateral+=("$pkg")
+  done < <(awk '/^(Remv|Purg) /{print $2}' <<<"$sim_out")
+  if ((${#collateral[@]} > 0)); then
+    msg_warn "Refusing purge of '${globs[*]}': would also remove ${collateral[*]}"
+    return 1
+  fi
+  return 0
+}
+
+# ------------------------------------------------------------------------------
 # Remove old tool version completely (purge + cleanup repos)
 # Usage: remove_old_tool_version "mariadb" "repository-name"
 # ------------------------------------------------------------------------------
@@ -696,11 +729,13 @@ remove_old_tool_version() {
   case "$tool_name" in
   mariadb)
     stop_all_services "mariadb"
+    _purge_is_safe 'mariadb*' || return 1
     $STD apt purge -y 'mariadb*' >/dev/null 2>&1 || true
     cleanup_tool_keyrings "mariadb"
     ;;
   mysql)
     stop_all_services "mysql"
+    _purge_is_safe 'mysql*' || return 1
     $STD apt purge -y 'mysql*' >/dev/null 2>&1 || true
     # Keep data directory for safety (remove manually if needed)
     # rm -rf /var/lib/mysql 2>/dev/null || true
@@ -708,12 +743,14 @@ remove_old_tool_version() {
     ;;
   mongodb)
     stop_all_services "mongod"
+    _purge_is_safe 'mongodb*' || return 1
     $STD apt purge -y 'mongodb*' >/dev/null 2>&1 || true
     # Keep data directory for safety (remove manually if needed)
     # rm -rf /var/lib/mongodb 2>/dev/null || true
     cleanup_tool_keyrings "mongodb"
     ;;
   node | nodejs)
+    _purge_is_safe nodejs npm || return 1
     $STD apt purge -y nodejs npm >/dev/null 2>&1 || true
     # Clean up npm global modules
     if command -v npm >/dev/null 2>&1; then
@@ -726,23 +763,27 @@ remove_old_tool_version() {
     ;;
   php)
     stop_all_services "php.*-fpm"
+    _purge_is_safe 'php*' || return 1
     $STD apt purge -y 'php*' >/dev/null 2>&1 || true
     rm -rf /etc/php 2>/dev/null || true
     cleanup_tool_keyrings "deb.sury.org-php" "php"
     ;;
   postgresql)
     stop_all_services "postgresql"
+    _purge_is_safe 'postgresql*' || return 1
     $STD apt purge -y 'postgresql*' >/dev/null 2>&1 || true
     # Keep data directory for safety (can be removed manually if needed)
     # rm -rf /var/lib/postgresql 2>/dev/null || true
     cleanup_tool_keyrings "postgresql" "pgdg"
     ;;
   java)
+    _purge_is_safe 'temurin*' 'adoptium*' 'openjdk*' || return 1
     $STD apt purge -y 'temurin*' 'adoptium*' 'openjdk*' >/dev/null 2>&1 || true
     cleanup_tool_keyrings "adoptium"
     ;;
   ruby)
     cleanup_legacy_install "ruby"
+    _purge_is_safe 'ruby*' || return 1
     $STD apt purge -y 'ruby*' >/dev/null 2>&1 || true
     ;;
   rust)
@@ -754,6 +795,7 @@ remove_old_tool_version() {
     ;;
   clickhouse)
     stop_all_services "clickhouse-server"
+    _purge_is_safe 'clickhouse*' || return 1
     $STD apt purge -y 'clickhouse*' >/dev/null 2>&1 || true
     # Keep data directory for safety (remove manually if needed)
     # rm -rf /var/lib/clickhouse 2>/dev/null || true
@@ -1292,14 +1334,17 @@ create_temp_dir() {
 #   - Copies each given file/directory into a persistent store at
 #     /opt/<NSAPP>.backup, mirroring its absolute path inside the store, and
 #     records it in a manifest so restore_backup needs no arguments.
-#   - Idempotent: if a store from a previous (failed) run already exists, it is
-#     left untouched and no new backup is taken. This keeps the last-known-good
-#     data instead of overwriting it with now-partially-updated data on retry.
+#   - Idempotent per path: a path already recorded in the manifest (from this
+#     run or a previous failed one) is left untouched, keeping the
+#     last-known-good copy instead of overwriting it with now-partially-updated
+#     data on retry. Any requested path NOT yet in the manifest is backed up
+#     now and appended - so a manifest left incomplete by an interrupted prior
+#     run gets completed instead of silently missing paths on restore.
 #   - Missing source paths are skipped with a warning (not fatal).
 #   - Aborts the update on copy failure: if any file/dir cannot be backed up,
-#     the half-written store is removed and the script exits, so the update
-#     never runs against unprotected data (and a retry re-attempts a clean
-#     backup rather than skipping it).
+#     the script exits before the update runs against unprotected data (the
+#     paths already recorded are left in place, so a retry only redoes the one
+#     that failed).
 #
 # restore_backup
 #   - Copies every path recorded in the manifest back to its origin (replacing
@@ -1318,27 +1363,28 @@ create_backup() {
     return 0
   }
 
-  if [[ -f "$manifest" ]]; then
-    msg_ok "Existing backup found at ${store}, skipping backup"
-    return 0
+  if ! mkdir -p "$store" || ! touch "$manifest"; then
+    msg_error "Backup failed: could not create store at ${store} - aborting update"
+    exit 1
   fi
 
   msg_info "Backing up data"
-  if ! mkdir -p "$store" || ! : >"$manifest"; then
-    msg_error "Backup failed: could not create store at ${store} - aborting update"
-    rm -rf "$store"
-    exit 1
-  fi
   for path in "$@"; do
     path="${path%/}"
+    if grep -qxF "$path" "$manifest" 2>/dev/null; then
+      continue
+    fi
     if [[ ! -e "$path" ]]; then
       msg_warn "Skipping backup of '${path}' (not found)"
+      continue
+    fi
+    if mountpoint -q "$path" 2>/dev/null; then
+      msg_warn "Skipping backup of '${path}' (is a mount point)"
       continue
     fi
     dest="${store}/files${path}"
     if ! mkdir -p "$(dirname "$dest")" || ! cp -a "$path" "$dest"; then
       msg_error "Backup of '${path}' failed - aborting update"
-      rm -rf "$store"
       exit 1
     fi
     echo "$path" >>"$manifest"
@@ -1466,7 +1512,7 @@ prompt_for_github_token() {
   fi
 
   local reply
-  read -rp "${TAB}Would you like to enter a GitHub Personal Access Token (PAT)? [y/N]: " reply
+  read -rp "${TAB}Would you like to enter a GitHub Personal Access Token (PAT)? [y/N]: " reply </dev/tty
   reply="${reply:-n}"
 
   if [[ ! "${reply,,}" =~ ^(y|yes)$ ]]; then
@@ -1475,7 +1521,7 @@ prompt_for_github_token() {
 
   local token
   while true; do
-    read -rp "${TAB}Enter your GitHub PAT: " token
+    read -rp "${TAB}Enter your GitHub PAT: " token </dev/tty
     # Trim leading/trailing whitespace
     token="$(echo "$token" | xargs)"
     if [[ -z "$token" ]]; then
@@ -2040,8 +2086,9 @@ cleanup_orphaned_sources() {
     local basename_file
     basename_file=$(basename "$sources_file")
 
-    # NEVER remove debian.sources - this is the standard Debian repository
-    if [[ "$basename_file" == "debian.sources" ]]; then
+    # NEVER remove the distro's own base sources file (debian.sources,
+    # ubuntu.sources, ...)
+    if [[ "$basename_file" == "$(get_os_info id).sources" ]]; then
       continue
     fi
 
@@ -2113,7 +2160,7 @@ ensure_apt_working() {
       # Step 4: More aggressive - remove all third-party sources
       msg_warn "APT update still failing, removing third-party sources"
       find /etc/apt/sources.list.d/ -type f \( -name "*.sources" -o -name "*.list" \) \
-        ! -name "debian.sources" -delete 2>/dev/null || true
+        ! -name "$(get_os_info id).sources" -delete 2>/dev/null || true
 
       # Final attempt
       if ! $STD apt update; then
@@ -2523,9 +2570,9 @@ _download_source_tarball() {
 # directory). Extracts <tarball_path> into <workdir>, then copies the contents
 # of that top-level directory into <target>.
 #
-#   - Honors CLEAN_INSTALL=1 (wipes <target> first, dotfiles included — back
-#     up config dotfiles like .env via create_backup and call restore_backup
-#     BEFORE any build step that sources them).
+#   - Honors CLEAN_INSTALL=1 (wipes <target> first, dotfiles included, mount
+#     points preserved — back up config dotfiles like .env via create_backup
+#     and call restore_backup BEFORE any build step that sources them).
 #   - Does NOT own <workdir>: the caller creates it and is responsible for its
 #     cleanup (typically via a RETURN trap on its tmpdir).
 #   - cp failures are non-fatal here, matching the previous inline behavior.
@@ -2537,7 +2584,7 @@ _deploy_source_tarball() {
 
   mkdir -p "$target"
   if [[ "${CLEAN_INSTALL:-0}" == "1" ]]; then
-    find "${target:?}" -mindepth 1 -delete
+    find "${target:?}" -mindepth 1 \( -type d -exec mountpoint -q {} \; -prune \) -o -print0 | xargs -0 rm -rf --
   fi
 
   tar --no-same-owner -xzf "$tarball" -C "$workdir" || {
@@ -2563,9 +2610,9 @@ _deploy_source_tarball() {
 # a single top-level directory, that directory is stripped (its contents land
 # directly in <target>); otherwise the archive contents are copied as-is.
 #
-#   - Honors CLEAN_INSTALL=1 (wipes <target> first, dotfiles included — back
-#     up config dotfiles like .env via create_backup and call restore_backup
-#     BEFORE any build step that sources them).
+#   - Honors CLEAN_INSTALL=1 (wipes <target> first, dotfiles included, mount
+#     points preserved — back up config dotfiles like .env via create_backup
+#     and call restore_backup BEFORE any build step that sources them).
 #   - Does NOT own <workdir>: the caller creates it and cleans it up.
 #
 # Returns: 0 on success, 65 on unsupported format, 251 on extraction failure,
@@ -2574,11 +2621,6 @@ _deploy_source_tarball() {
 _deploy_unpacked_archive() {
   local archive="$1" target="$2" workdir="$3"
   local filename="${archive##*/}"
-
-  mkdir -p "$target"
-  if [[ "${CLEAN_INSTALL:-0}" == "1" ]]; then
-    find "${target:?}" -mindepth 1 -delete
-  fi
 
   if [[ "$filename" == *.zip ]]; then
     ensure_dependencies unzip
@@ -2606,38 +2648,44 @@ _deploy_unpacked_archive() {
     return 65
   fi
 
-  local top_entries inner_dir
+  local top_entries inner_dir source_dir
   top_entries=$(find "$workdir" -mindepth 1 -maxdepth 1)
   if [[ "$(echo "$top_entries" | wc -l)" -eq 1 && -d "$top_entries" ]]; then
     inner_dir="$top_entries"
-    shopt -s dotglob nullglob
-    if compgen -G "$inner_dir/*" >/dev/null; then
-      cp -r "$inner_dir"/* "$target/" || {
-        msg_error "Failed to copy contents from $inner_dir to $target"
-        shopt -u dotglob nullglob
-        return 252
-      }
-    else
-      msg_error "Inner directory is empty: $inner_dir"
-      shopt -u dotglob nullglob
-      return 252
-    fi
-    shopt -u dotglob nullglob
+    source_dir="$inner_dir"
   else
-    shopt -s dotglob nullglob
-    if compgen -G "$workdir/*" >/dev/null; then
-      cp -r "$workdir"/* "$target/" || {
-        msg_error "Failed to copy contents to $target"
-        shopt -u dotglob nullglob
-        return 252
-      }
+    source_dir="$workdir"
+  fi
+
+  shopt -s dotglob nullglob
+  if ! compgen -G "$source_dir/*" >/dev/null; then
+    if [[ -n "$inner_dir" ]]; then
+      msg_error "Inner directory is empty: $inner_dir"
     else
       msg_error "Unpacked archive is empty"
-      shopt -u dotglob nullglob
-      return 252
     fi
     shopt -u dotglob nullglob
+    return 252
   fi
+
+  # <target> is only touched once the payload is known good. Wiping earlier left
+  # CLEAN_INSTALL callers with an empty target directory whenever the download
+  # was truncated, the archive was unreadable, or it unpacked to nothing.
+  mkdir -p "$target"
+  if [[ "${CLEAN_INSTALL:-0}" == "1" ]]; then
+    find "${target:?}" -mindepth 1 \( -type d -exec mountpoint -q {} \; -prune \) -o -print0 | xargs -0 rm -rf --
+  fi
+
+  if ! cp -r "$source_dir"/* "$target/"; then
+    if [[ -n "$inner_dir" ]]; then
+      msg_error "Failed to copy contents from $inner_dir to $target"
+    else
+      msg_error "Failed to copy contents to $target"
+    fi
+    shopt -u dotglob nullglob
+    return 252
+  fi
+  shopt -u dotglob nullglob
   return 0
 }
 
@@ -3973,7 +4021,7 @@ _gh_scan_older_releases() {
       local use_fallback="y"
       if [[ -t 0 ]]; then
         msg_warn "Release ${skip_tag} has no matching asset. Previous release ${rel_tag} has a compatible asset."
-        read -rp "Use version ${rel_tag} instead? [Y/n] (auto-yes in 60s): " -t 60 use_fallback || use_fallback="y"
+        read -rp "Use version ${rel_tag} instead? [Y/n] (auto-yes in 60s): " -t 60 use_fallback </dev/tty || use_fallback="y"
         use_fallback="${use_fallback:-y}"
       fi
 
@@ -4467,7 +4515,10 @@ setup_clickhouse() {
   if [[ -n "$CURRENT_VERSION" && "$CURRENT_VERSION" != "$CLICKHOUSE_VERSION" ]]; then
     msg_info "Upgrade ClickHouse from $CURRENT_VERSION to $CLICKHOUSE_VERSION"
     stop_all_services "clickhouse-server"
-    remove_old_tool_version "clickhouse"
+    remove_old_tool_version "clickhouse" || {
+      msg_error "Aborting ClickHouse upgrade: another package depends on it"
+      return 1
+    }
   else
     msg_info "Setup ClickHouse $CLICKHOUSE_VERSION"
   fi
@@ -4627,6 +4678,53 @@ _docker_is_noninteractive() {
   [[ "${DOCKER_NONINTERACTIVE:-}" == "1" || "${DOCKER_NONINTERACTIVE:-}" == "true" || "${DOCKER_NONINTERACTIVE:-}" == "TRUE" ]] || [[ ! -t 0 ]]
 }
 
+# ------------------------------------------------------------------------------
+# ensure_docker()
+#
+# - Docker precondition for addon scripts that ship a compose stack
+# - Reuses an existing installation, otherwise offers to install Docker
+#   (Debian/Ubuntu via setup_docker, Alpine via apk)
+# - Aborts when the user declines or Compose is unavailable afterwards
+# ------------------------------------------------------------------------------
+ensure_docker() {
+  if command -v docker &>/dev/null; then
+    msg_ok "Docker $(docker --version | cut -d' ' -f3 | tr -d ',') is available"
+    if docker compose version &>/dev/null; then
+      msg_ok "Docker Compose is available"
+      return 0
+    fi
+    msg_error "Docker Compose plugin is not available. Please install it."
+    exit 237
+  fi
+
+  msg_warn "Docker is not installed."
+  echo -n "${TAB:-  }Install Docker now? (y/N): "
+  local install_docker_prompt
+  read -r install_docker_prompt
+  if [[ ! "${install_docker_prompt,,}" =~ ^(y|yes)$ ]]; then
+    msg_error "Docker is required for ${APP:-this script}. Exiting."
+    exit 254
+  fi
+
+  if is_alpine; then
+    msg_info "Installing Docker"
+    $STD apk add --no-cache docker docker-cli-compose
+    $STD rc-update add docker default
+    $STD rc-service docker start
+    msg_ok "Installed Docker"
+  else
+    setup_docker || {
+      msg_error "Docker installation failed."
+      exit 237
+    }
+  fi
+
+  if ! command -v docker &>/dev/null || ! docker compose version &>/dev/null; then
+    msg_error "Docker or the Compose plugin is still unavailable after installation."
+    exit 237
+  fi
+}
+
 setup_docker() {
   local docker_installed=false
   local USE_DOCKER_REPO="${USE_DOCKER_REPO:-true}"
@@ -4753,8 +4851,8 @@ EOF
 
   # Container Update Check
   # - Skipped entirely when running unattended / non-interactive
-  # - Compose-managed containers: offered via Y/N → docker compose pull + up -d
-  # - Standalone containers: offered via Y/N → image pull only (no stop/rm)
+  # - Lists containers with a newer image available and the command to update
+  #   them; does not pull/recreate anything itself
   if [ "$docker_installed" = true ] && ! _docker_is_noninteractive; then
     msg_info "Checking for container updates"
 
@@ -4792,41 +4890,14 @@ EOF
     if [[ ${#compose_updates[@]} -eq 0 && ${#standalone_updates[@]} -eq 0 ]]; then
       msg_ok "All containers are up-to-date"
     else
-      local reply
+      msg_warn "Updates available (not applied automatically):"
       for entry in "${compose_updates[@]}"; do
         IFS='|' read -r name image compose_workdir compose_service <<<"$entry"
-        reply=""
-        if read -r -t 60 -p "${TAB3}Update ${name} (${image}) via Compose? <y/N> (auto-no in 60s): " reply; then
-          echo ""
-        else
-          echo ""
-        fi
-        if [[ "${reply,,}" =~ ^(y|yes)$ ]]; then
-          msg_info "Updating $name"
-          if (cd "$compose_workdir" && $STD docker compose pull "$compose_service" && $STD docker compose up -d "$compose_service"); then
-            msg_ok "Updated $name"
-          else
-            msg_warn "Could not update $name — try manually in $compose_workdir"
-          fi
-        fi
+        echo -e "${TAB3}${name} (${image}) — update via: cd ${compose_workdir} && docker compose pull ${compose_service} && docker compose up -d ${compose_service}"
       done
-
       for entry in "${standalone_updates[@]}"; do
         IFS='|' read -r name image <<<"$entry"
-        reply=""
-        if read -r -t 60 -p "${TAB3}Pull new image for ${name} (${image})? <y/N> (auto-no in 60s): " reply; then
-          echo ""
-        else
-          echo ""
-        fi
-        if [[ "${reply,,}" =~ ^(y|yes)$ ]]; then
-          msg_info "Pulling new image for $name"
-          if $STD docker pull "$image"; then
-            msg_ok "New image available for $name — recreate the container to apply the update"
-          else
-            msg_warn "Failed to pull image for $name"
-          fi
-        fi
+        echo -e "${TAB3}${name} (${image}) — update via: docker pull ${image} && docker restart ${name}"
       done
     fi
   fi
@@ -5124,7 +5195,10 @@ setup_go() {
   # Scenario 2: Different version or not installed
   if [[ -n "$CURRENT_VERSION" && "$CURRENT_VERSION" != "$GO_VERSION" ]]; then
     msg_info "Upgrade Go from $CURRENT_VERSION to $GO_VERSION"
-    remove_old_tool_version "go"
+    remove_old_tool_version "go" || {
+      msg_error "Aborting Go upgrade: another package depends on it"
+      return 1
+    }
   else
     msg_info "Setup Go $GO_VERSION"
   fi
@@ -5409,7 +5483,7 @@ setup_hwaccel() {
     # Read with 60 second timeout
     local selection=""
     echo -n "Select GPU(s) to configure (1-${gpu_count}, A=all) [timeout 60s, default=all]: "
-    if read -r -t 60 selection; then
+    if read -r -t 60 selection </dev/tty; then
       selection="${selection^^}" # uppercase
     else
       echo ""
@@ -5457,7 +5531,7 @@ setup_hwaccel() {
       echo ""
       msg_custom "🎮" "${GN}" "NVIDIA GPU passthrough detected"
       local nvidia_reply=""
-      read -r -t 60 -p "${TAB3}⚙️ Install NVIDIA driver libraries in the container? [Y/n] (auto-yes in 60s): " nvidia_reply || nvidia_reply=""
+      read -r -t 60 -p "${TAB3}⚙️ Install NVIDIA driver libraries in the container? [Y/n] (auto-yes in 60s): " nvidia_reply </dev/tty || nvidia_reply=""
       case "${nvidia_reply,,}" in
       n | no) install_nvidia_drivers="no" ;;
       *) install_nvidia_drivers="yes" ;;
@@ -6727,7 +6801,10 @@ EOF
   # Scenario 2b: Different version installed - clean upgrade
   if [[ -n "$CURRENT_VERSION" ]] && ! version_matches_spec "$CURRENT_VERSION" "$MARIADB_VERSION"; then
     msg_info "Upgrade MariaDB from $CURRENT_VERSION to $MARIADB_VERSION"
-    remove_old_tool_version "mariadb"
+    remove_old_tool_version "mariadb" || {
+      msg_error "Aborting MariaDB upgrade: another package depends on it"
+      return 1
+    }
   fi
 
   # Scenario 3: Fresh install or version change with specific version
@@ -7257,7 +7334,10 @@ setup_mongodb() {
   # Scenario 2: Different version installed - clean upgrade
   if [[ -n "$INSTALLED_VERSION" && "$INSTALLED_VERSION" != "$MONGO_VERSION" ]]; then
     msg_info "Upgrade MongoDB from $INSTALLED_VERSION to $MONGO_VERSION"
-    remove_old_tool_version "mongodb"
+    remove_old_tool_version "mongodb" || {
+      msg_error "Aborting MongoDB upgrade: another package depends on it (e.g. an app using it)"
+      return 1
+    }
   else
     msg_info "Setup MongoDB $MONGO_VERSION"
   fi
@@ -7447,7 +7527,10 @@ setup_mysql() {
   # Scenario 2: Different version installed - clean upgrade
   if [[ -n "$CURRENT_VERSION" ]] && ! version_matches_spec "$CURRENT_VERSION" "$MYSQL_VERSION"; then
     msg_info "Upgrade MySQL from $CURRENT_VERSION to $MYSQL_VERSION"
-    remove_old_tool_version "mysql"
+    remove_old_tool_version "mysql" || {
+      msg_error "Aborting MySQL upgrade: another package depends on it"
+      return 1
+    }
   else
     msg_info "Setup MySQL $MYSQL_VERSION"
   fi
@@ -7611,7 +7694,10 @@ setup_nodejs() {
     if [[ -n "$CURRENT_NODE_VERSION" && "$CURRENT_NODE_VERSION" != "$NODE_VERSION" ]]; then
       msg_info "Upgrade Node.js from $CURRENT_NODE_VERSION to $NODE_VERSION"
       node_setup_ok_msg="Upgrade Node.js to $NODE_VERSION"
-      remove_old_tool_version "nodejs"
+      remove_old_tool_version "nodejs" || {
+        msg_error "Aborting Node.js upgrade: another package depends on it"
+        return 1
+      }
     else
       msg_info "Setup Node.js $NODE_VERSION"
       node_setup_ok_msg="Setup Node.js $NODE_VERSION"
@@ -7682,6 +7768,10 @@ setup_nodejs() {
     else
       msg_warn "npm update failed on Node 22.22.2"
     fi
+  fi
+
+  if [[ "$(npm -v 2>/dev/null | cut -d. -f1)" -ge 11 ]]; then
+    $STD npm config set dangerously-allow-all-scripts true --location=global 2>/dev/null || true
   fi
 
   # Set a safe default heap limit for Node.js builds if not explicitly provided.
@@ -9304,6 +9394,8 @@ fetch_and_deploy_from_url() {
 
   if [[ "$file_desc" =~ gzip.*compressed|gzip\ compressed\ data ]]; then
     archive_type="tar"
+  elif [[ "$file_desc" =~ XZ\ compressed\ data ]]; then
+    archive_type="tar"
   elif [[ "$file_desc" =~ Zip.*archive|ZIP\ archive ]]; then
     archive_type="zip"
   elif [[ "$file_desc" =~ Debian.*package|Debian\ binary\ package ]]; then
@@ -9342,7 +9434,7 @@ fetch_and_deploy_from_url() {
   mkdir -p "$directory"
 
   if [[ "${CLEAN_INSTALL:-0}" == "1" ]]; then
-    find "${directory:?}" -mindepth 1 -delete
+    find "${directory:?}" -mindepth 1 \( -type d -exec mountpoint -q {} \; -prune \) -o -print0 | xargs -0 rm -rf --
   fi
 
   local unpack_tmp
@@ -9755,7 +9847,7 @@ _gl_scan_older_releases() {
       local use_fallback="y"
       if [[ -t 0 ]]; then
         msg_warn "Release ${skip_tag} has no matching asset. Previous release ${rel_tag} has a compatible asset."
-        read -rp "Use version ${rel_tag} instead? [Y/n] (auto-yes in 60s): " -t 60 use_fallback || use_fallback="y"
+        read -rp "Use version ${rel_tag} instead? [Y/n] (auto-yes in 60s): " -t 60 use_fallback </dev/tty || use_fallback="y"
         use_fallback="${use_fallback:-y}"
       fi
 

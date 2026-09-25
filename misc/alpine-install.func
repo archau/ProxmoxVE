@@ -126,7 +126,7 @@ network_check() {
   fi
 
   if [[ $ipv4_connected == false ]]; then
-    read -r -p "No Internet detected, would you like to continue anyway? <y/N> " prompt
+    read -r -p "No Internet detected, would you like to continue anyway? <y/N> " prompt </dev/tty
     if [[ "${prompt,,}" =~ ^(y|yes)$ ]]; then
       echo -e "${INFO}${RD}Expect Issues Without Internet${CL}"
     else
@@ -136,7 +136,7 @@ network_check() {
   fi
 
   # DNS resolution checks for GitHub-related domains
-  GIT_HOSTS=("github.com" "raw.githubusercontent.com" "api.github.com" "git.community-scripts.org")
+  GIT_HOSTS=("github.com" "raw.githubusercontent.com" "api.github.com")
   GIT_STATUS="Git DNS:"
   DNS_FAILED=false
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_CS_DEFAULT_URL="https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main"
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 tteck
 # Author: tteck (tteckster)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -39,15 +41,15 @@ function update_script() {
 
     create_backup /opt/homepage/.env /opt/homepage/config
     BACKUP_DIR=/opt/homepage-assets.backup create_backup /opt/homepage/public/images /opt/homepage/public/icons
-    
+
     CLEAN_INSTALL=1 fetch_and_deploy_gh_release "homepage" "gethomepage/homepage" "tarball"
-    
+
     restore_backup
 
     msg_info "Updating Homepage (Patience)"
     RELEASE=$(get_latest_github_release "gethomepage/homepage")
     cd /opt/homepage
-    echo 'onlyBuiltDependencies=*' >> .npmrc
+    echo 'onlyBuiltDependencies=*' >>.npmrc
     $STD pnpm install
     $STD pnpm update --no-save caniuse-lite
     export NEXT_PUBLIC_VERSION="v$RELEASE"
@@ -56,6 +58,35 @@ function update_script() {
     export NEXT_TELEMETRY_DISABLED=1
     $STD pnpm build
     BACKUP_DIR=/opt/homepage-assets.backup restore_backup
+    if ! grep -q 'AUTH' /opt/homepage/.env; then
+      msg_info "Updating .env"
+      cp /opt/homepage/.env /opt/homepage/env.bak
+      cat <<EOF >>/opt/homepage/.env
+## Optional Authentication
+# HOMEPAGE_AUTH_ENABLED=true
+# HOMEPAGE_AUTH_SECRET="$(openssl rand -base64 32)"
+# HOMEPAGE_EXTERNAL_URL=<your-external-url>
+## Uncomment below and use strong, unique password for password login
+# HOMEPAGE_AUTH_PASSWORD=
+## Uncomment and fill in below for OIDC login
+# HOMEPAGE_OIDC_ISSUER=
+# HOMEPAGE_OIDC_CLIENT_ID=
+# HOMEPAGE_OIDC_CLIENT_SECRET=
+# HOMEPAGE_OIDC_SCOPE=openid email profile
+# HOMEPAGE_OIDC_NAME=
+EOF
+      msg_ok "Updated .env"
+      rm /opt/homepage/env.bak
+      chmod 600 /opt/homepage/.env
+    fi
+    if ! grep -q '^Environment=CI=true' /etc/systemd/system/homepage.service; then
+      sed -i '/^ExecStart=/i Environment=CI=true' /etc/systemd/system/homepage.service
+      systemctl daemon-reload
+    fi
+    if grep -q '^ExecStart=pnpm start' /etc/systemd/system/homepage.service; then
+      sed -i 's|^ExecStart=pnpm start$|ExecStart=/opt/homepage/node_modules/.bin/next start|' /etc/systemd/system/homepage.service
+      systemctl daemon-reload
+    fi
     msg_ok "Updated Homepage"
 
     msg_info "Starting service"

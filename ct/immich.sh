@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_CS_DEFAULT_URL="https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main"
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: vhsdream
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -54,7 +56,7 @@ Pin:release a=testing
 Pin-Priority: 450
 EOF
     [[ -f /etc/apt/preferences.d/immich ]] && rm /etc/apt/preferences.d/immich
-    $STD apt update
+    apt_update_safe
     msg_ok "Added Debian Testing repo"
   fi
 
@@ -100,9 +102,10 @@ EOF
     fi
   fi
   if [[ -f ~/.immich_library_revisions ]]; then
-    libraries=("libjxl" "libheif" "libraw" "imagemagick" "libvips")
+    libraries=("libjxl" "jpegli" "libheif" "libraw" "imagemagick" "libvips")
     cd "$BASE_DIR"
     msg_warn "Checking for updates to custom image-processing libraries (recompile time: 2-15min per library)"
+    ensure_dependencies liblcms2-dev libjpeg62-turbo-dev libspng-dev libexif-dev
     $STD git pull
     for library in "${libraries[@]}"; do
       compile_"$library"
@@ -110,12 +113,12 @@ EOF
     msg_ok "Image-processing libraries up to date"
   fi
 
-  RELEASE="v3.1.0"
+  RELEASE="v3.2.2"
   if check_for_gh_release "Immich" "immich-app/immich" "${RELEASE}" "each release is tested individually before the version is updated. Please do not open issues for this"; then
     if [[ $(cat ~/.immich) > "2.5.1" ]]; then
       msg_info "Enabling Maintenance Mode"
       cd /opt/immich/app/bin
-      $STD ./immich-admin enable-maintenance-mode
+      $STD ./immich-admin enable-maintenance-mode || true
       export MAINT_MODE=1
       $STD cd -
       msg_ok "Enabled Maintenance Mode"
@@ -185,11 +188,10 @@ EOF
     msg_info "Updating Immich web and microservices"
     cd "$SRC_DIR"/server
     # server build
-    export SHARP_IGNORE_GLOBAL_LIBVIPS=true
     $STD pnpm --filter @immich/sdk --filter @immich/plugin-sdk --filter immich build
-    unset SHARP_IGNORE_GLOBAL_LIBVIPS
-    export SHARP_FORCE_GLOBAL_LIBVIPS=true
     $STD pnpm --filter immich --prod --no-optional deploy "$APP_DIR"
+    export SHARP_FORCE_GLOBAL_LIBVIPS=true
+    $STD pnpm --dir "$APP_DIR/node_modules/sharp" exec npm run build
 
     # Patch helmet.json: disable upgrade-insecure-requests for HTTP access
     if [[ -f "$APP_DIR/helmet.json" ]]; then
@@ -203,7 +205,6 @@ EOF
     cd "$SRC_DIR"
     echo "packageImportMethod: hardlink" >>./pnpm-workspace.yaml
     unset SHARP_FORCE_GLOBAL_LIBVIPS
-    export SHARP_IGNORE_GLOBAL_LIBVIPS=true
     $STD pnpm --filter @immich/sdk --filter immich-web --filter @immich/cli build
     $STD pnpm --filter @immich/cli --prod --no-optional deploy "$APP_DIR"/cli
     cp -a web/build "$APP_DIR"/www
@@ -214,7 +215,16 @@ EOF
     cd "$SRC_DIR"
     export MISE_TRUSTED_CONFIG_PATHS="$SRC_DIR"/mise.toml
     export MISE_DISABLE_TOOLS=github:jellyfin/jellyfin-ffmpeg
-    $STD mise install
+    mise_ok=0
+    for i in 1 2 3; do
+      $STD mise install && {
+        mise_ok=1
+        break
+      }
+      msg_warn "mise install failed (attempt $i/3) - retrying"
+      sleep 5
+    done
+    [[ "$mise_ok" -eq 1 ]] || exit 1
     export PATH="$(mise bin-paths 2>/dev/null | tr '\n' ':')$PATH"
     if ! command -v extism-js >/dev/null 2>&1; then
       # extism-js ships as a bare gzip-compressed single binary (.gz) that
@@ -313,7 +323,7 @@ EOF
     [[ ! -f "$GEO_DIR/countryInfo.txt" ]] && curl_with_retry "https://download.geonames.org/export/dump/countryInfo.txt" "countryInfo.txt"
     ln -s "${UPLOAD_DIR:-/opt/immich/upload}" "$APP_DIR"/upload
     ln -s "${UPLOAD_DIR:-/opt/immich/upload}" "$ML_DIR"/upload
-    ln -s "$GEO_DIR" "$APP_DIR"
+    ln -sfn "$GEO_DIR" "$APP_DIR/geodata"
     [[ ! -f /usr/bin/immich ]] && ln -sf "$APP_DIR"/cli/bin/immich /usr/bin/immich
     [[ ! -f /usr/bin/immich-admin ]] && ln -sf "$APP_DIR"/bin/immich-admin /usr/bin/immich-admin
 
@@ -373,10 +383,7 @@ PY
 
 function compile_libjxl() {
   SOURCE=${SOURCE_DIR}/libjxl
-  JPEGLI_LIBJPEG_LIBRARY_SOVERSION="62"
-  JPEGLI_LIBJPEG_LIBRARY_VERSION="62.3.0"
-  LIBJXL_REVISION="332feb17d17311c748445f7ee75c4fb55cc38530"
-  # : "${LIBJXL_REVISION:=$(jq -cr '.revision' "$BASE_DIR"/server/sources/libjxl.json)}"
+  LIBJXL_REVISION="$(jq -cr '.revision' "$BASE_DIR"/server/sources/libjxl.json)"
   if [[ "$LIBJXL_REVISION" != "$(grep 'libjxl' ~/.immich_library_revisions | awk '{print $2}')" ]]; then
     msg_info "Recompiling libjxl"
     [[ -d "$SOURCE" ]] && rm -rf "$SOURCE"
@@ -384,8 +391,6 @@ function compile_libjxl() {
     cd "$SOURCE"
     $STD git reset --hard "$LIBJXL_REVISION"
     $STD git submodule update --init --recursive --depth 1 --recommend-shallow
-    $STD git apply "$BASE_DIR"/server/sources/libjxl-patches/jpegli-empty-dht-marker.patch
-    $STD git apply "$BASE_DIR"/server/sources/libjxl-patches/jpegli-icc-warning.patch
     mkdir build
     cd build
     $STD cmake \
@@ -393,18 +398,16 @@ function compile_libjxl() {
       -DBUILD_TESTING=OFF \
       -DJPEGXL_ENABLE_DOXYGEN=OFF \
       -DJPEGXL_ENABLE_MANPAGES=OFF \
-      -DJPEGXL_ENABLE_PLUGIN_GIMP210=OFF \
       -DJPEGXL_ENABLE_BENCHMARK=OFF \
       -DJPEGXL_ENABLE_EXAMPLES=OFF \
       -DJPEGXL_FORCE_SYSTEM_BROTLI=ON \
       -DJPEGXL_FORCE_SYSTEM_HWY=ON \
-      -DJPEGXL_ENABLE_JPEGLI=ON \
-      -DJPEGXL_ENABLE_JPEGLI_LIBJPEG=ON \
-      -DJPEGXL_INSTALL_JPEGLI_LIBJPEG=ON \
+      -DJPEGXL_ENABLE_HWY_AVX3=ON \
+      -DJPEGXL_ENABLE_HWY_AVX3_ZEN4=ON \
+      -DJPEGXL_ENABLE_HWY_SVE=OFF \
+      -DJPEGXL_ENABLE_HWY_SVE2=OFF \
+      -DJPEGXL_ENABLE_HWY_SVE2_128=ON \
       -DJPEGXL_ENABLE_PLUGINS=ON \
-      -DJPEGLI_LIBJPEG_LIBRARY_SOVERSION="$JPEGLI_LIBJPEG_LIBRARY_SOVERSION" \
-      -DJPEGLI_LIBJPEG_LIBRARY_VERSION="$JPEGLI_LIBJPEG_LIBRARY_VERSION" \
-      -DLIBJPEG_TURBO_VERSION_NUMBER=2001005 \
       ..
     $STD cmake --build . -- -j"$(nproc)"
     $STD cmake --install .
@@ -417,10 +420,63 @@ function compile_libjxl() {
   fi
 }
 
+function compile_jpegli() {
+  SOURCE=${SOURCE_DIR}/jpegli
+  JPEGLI_LIBJPEG_LIBRARY_SOVERSION="62"
+  JPEGLI_LIBJPEG_LIBRARY_VERSION="62.3.0"
+  JPEGLI_REVISION="$(jq -cr '.revision' "$BASE_DIR"/server/sources/jpegli.json)"
+  if [[ "$JPEGLI_REVISION" != "$(grep 'jpegli' ~/.immich_library_revisions | awk '{print $2}')" ]]; then
+    msg_info "Recompiling jpegli"
+    [[ -d "$SOURCE" ]] && rm -rf "$SOURCE"
+    $STD git clone https://github.com/google/jpegli.git "$SOURCE"
+    cd "$SOURCE"
+    $STD git reset --hard "$JPEGLI_REVISION"
+    $STD git submodule update --init --depth 1 --recommend-shallow third_party/libjpeg-turbo
+    $STD git apply -3 "$BASE_DIR"/server/sources/jpegli-patches/jpegli-empty-dht-marker.patch
+    $STD git apply -3 "$BASE_DIR"/server/sources/jpegli-patches/jpegli-icc-warning.patch
+    mkdir build
+    cd build
+    $STD cmake \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DBUILD_TESTING=OFF \
+      -DJPEGLI_ENABLE_DOXYGEN=OFF \
+      -DJPEGLI_ENABLE_MANPAGES=OFF \
+      -DJPEGLI_ENABLE_BENCHMARK=OFF \
+      -DJPEGLI_ENABLE_TOOLS=OFF \
+      -DJPEGLI_ENABLE_DEVTOOLS=OFF \
+      -DJPEGLI_ENABLE_FUZZERS=OFF \
+      -DJPEGLI_ENABLE_JNI=OFF \
+      -DJPEGLI_ENABLE_OPENEXR=OFF \
+      -DJPEGLI_ENABLE_SJPEG=OFF \
+      -DJPEGLI_ENABLE_SKCMS=OFF \
+      -DJPEGLI_FORCE_SYSTEM_HWY=ON \
+      -DJPEGLI_FORCE_SYSTEM_LCMS2=ON \
+      -DJPEGLI_ENABLE_JPEGLI_LIBJPEG=ON \
+      -DJPEGLI_INSTALL_JPEGLI_LIBJPEG=ON \
+      -DJPEGLI_ENABLE_HWY_AVX3=ON \
+      -DJPEGLI_ENABLE_HWY_AVX3_ZEN4=ON \
+      -DJPEGLI_ENABLE_HWY_SVE=OFF \
+      -DJPEGLI_ENABLE_HWY_SVE2=OFF \
+      -DJPEGLI_ENABLE_HWY_SVE2_128=ON \
+      -DJPEGLI_LIBJPEG_LIBRARY_SOVERSION="$JPEGLI_LIBJPEG_LIBRARY_SOVERSION" \
+      -DJPEGLI_LIBJPEG_LIBRARY_VERSION="$JPEGLI_LIBJPEG_LIBRARY_VERSION" \
+      -DLIBJPEG_TURBO_VERSION_NUMBER=2001005 \
+      ..
+    $STD cmake --build . -- -j"$(nproc)"
+    $STD cmake --install .
+    ldconfig /usr/local/lib
+    $STD make clean
+    cd "$STAGING_DIR"
+    rm -rf "$SOURCE"/{build,third_party}
+    sed -i "s/jpegli: .*$/jpegli: $JPEGLI_REVISION/" ~/.immich_library_revisions
+    msg_ok "Recompiled jpegli"
+  fi
+}
+
 function compile_libheif() {
   SOURCE=${SOURCE_DIR}/libheif
   ensure_dependencies libaom-dev
-  LIBHEIF_REVISION="62f1b8c76ed4d8305071fdacbe74ef9717bacac5"
+  LIBHEIF_REVISION="ac1cb05c39008f01525c991ff8b88f84ddf70fd2"
   # : "${LIBHEIF_REVISION:=$(jq -cr '.revision' "$BASE_DIR"/server/sources/libheif.json)}"
   if [[ "${update:-}" ]] || [[ "$LIBHEIF_REVISION" != "$(grep 'libheif' ~/.immich_library_revisions | awk '{print $2}')" ]]; then
     msg_info "Recompiling libheif"
@@ -452,7 +508,7 @@ function compile_libheif() {
 
 function compile_libraw() {
   SOURCE=${SOURCE_DIR}/libraw
-  LIBRAW_REVISION="b860248a89d9082b8e0a1e202e516f46af9adb29"
+  LIBRAW_REVISION="e419de08001de28ae6988ecb22df47e52b9c5eaa"
   # : "${LIBRAW_REVISION:=$(jq -cr '.revision' "$BASE_DIR"/server/sources/libraw.json)}"
   if [[ "$LIBRAW_REVISION" != "$(grep 'libraw' ~/.immich_library_revisions | awk '{print $2}')" ]]; then
     msg_info "Recompiling libraw"
@@ -495,7 +551,7 @@ function compile_imagemagick() {
 
 function compile_libvips() {
   SOURCE=$SOURCE_DIR/libvips
-  LIBVIPS_REVISION="e01a4797cabe77d457fdfa7d776b7a7e7ca6d6a7"
+  LIBVIPS_REVISION="$(jq -cr '.revision' "$BASE_DIR"/server/sources/libvips.json)"
   if [[ "$LIBVIPS_REVISION" != "$(grep 'libvips' ~/.immich_library_revisions | awk '{print $2}')" ]]; then
     msg_info "Recompiling libvips"
     [[ -d "$SOURCE" ]] && rm -rf "$SOURCE"

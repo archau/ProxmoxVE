@@ -63,7 +63,14 @@ get_pve_major_minor() {
 
 component_exists_in_sources() {
   local component="$1"
-  grep -h -E "^[^#]*Components:[^#]*\b${component}\b" /etc/apt/sources.list.d/*.sources 2>/dev/null | grep -q .
+  local line comp
+  while IFS= read -r line; do
+    line="${line#*Components:}"
+    for comp in $line; do
+      [[ "$comp" == "$component" ]] && return 0
+    done
+  done < <(grep -h -E "^[^#]*Components:" /etc/apt/sources.list.d/*.sources 2>/dev/null)
+  return 1
 }
 
 main() {
@@ -124,12 +131,6 @@ EOF
     ;;
   no) msg_error "Selected no to Correcting Proxmox VE Sources" ;;
   esac
-
-  if [[ "$(dpkg --print-architecture 2>/dev/null)" == "arm64" ]]; then
-    msg_ok "ARM64 detected - skipping Proxmox repository setup"
-    post_routines_common
-    return
-  fi
 
   CHOICE=$(whiptail --backtitle "Proxmox VE Helper Scripts" --title "PVE-ENTERPRISE" --menu "The 'pve-enterprise' repository is only available to users who have purchased a Proxmox VE subscription.\n \nDisable 'pve-enterprise' repository?" 14 58 2 \
     "yes" " " \
@@ -286,12 +287,6 @@ EOF
       ;;
     no) msg_error "Selected no to Correcting Proxmox VE Sources" ;;
     esac
-  fi
-
-  if [[ "$(dpkg --print-architecture 2>/dev/null)" == "arm64" ]]; then
-    msg_ok "ARM64 detected - skipping Proxmox repository setup"
-    post_routines_common
-    return
   fi
 
   # ---- PVE-ENTERPRISE ----

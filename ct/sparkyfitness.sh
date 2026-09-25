@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_CS_DEFAULT_URL="https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main"
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: Tom Frenzel (tomfrenzel)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -30,6 +32,7 @@ function update_script() {
     exit
   fi
 
+  ensure_dependencies git
   if check_for_gh_release "sparkyfitness" "CodeWithCJ/SparkyFitness"; then
     msg_info "Stopping Services"
     systemctl stop sparkyfitness-server nginx
@@ -64,6 +67,7 @@ function update_script() {
       -e 's|${SPARKY_FITNESS_SERVER_PORT}|3010|g' \
       -e "s|\${SPARKY_FITNESS_FRONTEND_URL}|${FRONTEND_URL}|g" \
       -e 's|${NGINX_LISTEN_PORT}|80|g' \
+      -e 's|${NGINX_RATE_LIMIT}|5r/s|g' \
       -e 's|${NGINX_ACCESS_LOG}|/var/log/nginx/sparkyfitness.access.log|g' \
       -e 's|${NGINX_ERROR_LOG}|/var/log/nginx/sparkyfitness.error.log|g' \
       -e 's|root /usr/share/nginx/html;|root /var/www/sparkyfitness;|g' \
@@ -82,7 +86,7 @@ function update_script() {
   Type=simple
   WorkingDirectory=/opt/sparkyfitness/SparkyFitnessServer
   EnvironmentFile=/etc/sparkyfitness/.env
-  ExecStart=/opt/sparkyfitness/SparkyFitnessServer/node_modules/.bin/tsx SparkyFitnessServer.js
+  ExecStart=/opt/sparkyfitness/SparkyFitnessServer/node_modules/.bin/tsx index.ts
   Restart=always
   RestartSec=5
 

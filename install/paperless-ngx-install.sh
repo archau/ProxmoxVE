@@ -45,8 +45,8 @@ msg_ok "Installed Dependencies"
 
 PG_VERSION="18" setup_postgresql
 PG_DB_NAME="paperlessdb" PG_DB_USER="paperless" setup_postgresql_db
-PYTHON_VERSION="3.13" setup_uv
 fetch_and_deploy_gh_release "paperless" "paperless-ngx/paperless-ngx" "prebuild" "latest" "/opt/paperless" "paperless*tar.xz"
+PYTHON_VERSION="3.13" UV_PROJECT_DIR="/opt/paperless" setup_uv
 
 msg_info "Setup Paperless-ngx"
 cd /opt/paperless
@@ -108,7 +108,7 @@ Requires=redis.service
 
 [Service]
 WorkingDirectory=/opt/paperless/src
-ExecStart=uv run -- celery --app paperless beat --loglevel INFO
+ExecStart=uv run --no-sync -- celery --app paperless beat --loglevel INFO
 
 [Install]
 WantedBy=multi-user.target
@@ -122,7 +122,7 @@ After=postgresql.service
 
 [Service]
 WorkingDirectory=/opt/paperless/src
-ExecStart=uv run -- celery --app paperless worker --loglevel INFO
+ExecStart=uv run --no-sync -- celery --app paperless worker --loglevel INFO
 
 [Install]
 WantedBy=multi-user.target
@@ -136,7 +136,7 @@ Requires=redis.service
 [Service]
 WorkingDirectory=/opt/paperless/src
 ExecStartPre=/bin/sleep 2
-ExecStart=uv run -- python manage.py document_consumer
+ExecStart=uv run --no-sync -- python manage.py document_consumer
 
 [Install]
 WantedBy=multi-user.target
@@ -151,7 +151,8 @@ Requires=redis.service
 
 [Service]
 WorkingDirectory=/opt/paperless/src
-ExecStart=uv run -- granian --interface asginl --ws --loop uvloop "paperless.asgi:application"
+#ExecStartPre=uv run --no-sync -- python manage.py document_index reindex --if-needed --no-progress-bar
+ExecStart=uv run --no-sync -- granian --interface asginl --ws --loop uvloop "paperless.asgi:application"
 Environment=GRANIAN_HOST=::
 Environment=GRANIAN_PORT=8000
 Environment=GRANIAN_WORKERS=1

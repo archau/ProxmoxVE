@@ -14,7 +14,7 @@ network_check
 update_os
 
 msg_info "Installing Dependencies"
-$STD apt install -y nginx
+$STD apt install -y git nginx
 msg_ok "Installed Dependencies"
 
 PG_VERSION="18" setup_postgresql
@@ -70,7 +70,7 @@ Requires=postgresql.service
 Type=simple
 WorkingDirectory=/opt/sparkyfitness/SparkyFitnessServer
 EnvironmentFile=/etc/sparkyfitness/.env
-ExecStart=/opt/sparkyfitness/SparkyFitnessServer/node_modules/.bin/tsx SparkyFitnessServer.js
+ExecStart=/opt/sparkyfitness/SparkyFitnessServer/node_modules/.bin/tsx index.ts
 Restart=always
 RestartSec=5
 
@@ -86,6 +86,7 @@ sed \
   -e 's|${SPARKY_FITNESS_SERVER_PORT}|3010|g' \
   -e "s|\${SPARKY_FITNESS_FRONTEND_URL}|http://${LOCAL_IP}:80|g" \
   -e 's|${NGINX_LISTEN_PORT}|80|g' \
+  -e 's|${NGINX_RATE_LIMIT}|5r/s|g' \
   -e 's|${NGINX_ACCESS_LOG}|/var/log/nginx/sparkyfitness.access.log|g' \
   -e 's|${NGINX_ERROR_LOG}|/var/log/nginx/sparkyfitness.error.log|g' \
   -e 's|root /usr/share/nginx/html;|root /var/www/sparkyfitness;|g' \

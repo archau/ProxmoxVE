@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_CS_DEFAULT_URL="https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main"
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: MickLesk (CanbiZ)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
@@ -223,6 +225,8 @@ http {
       proxy_pass $upstream_url;
       proxy_set_header Host $proxy_host;
       proxy_set_header User-Agent "Reitti/1.0";
+      proxy_ssl_server_name on;
+      proxy_ssl_name $proxy_host;
       proxy_cache tiles;
       proxy_cache_key $upstream_url;
       proxy_cache_valid 200 30d;

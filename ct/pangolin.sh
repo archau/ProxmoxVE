@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+_CS_DEFAULT_URL="https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main"
+_cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
+source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: Slaviša Arežina (tremor021)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
 # Source: https://pangolin.net/ | Github: https://github.com/fosrl/pangolin
 
 APP="Pangolin"
-PANGOLIN_VERSION="${PANGOLIN_VERSION:-1.21.0}"
+PANGOLIN_VERSION="${PANGOLIN_VERSION:-1.23.0}"
 var_tags="${var_tags:-proxy}"
 var_cpu="${var_cpu:-2}"
 var_ram="${var_ram:-4096}"
@@ -16,6 +18,9 @@ var_version="${var_version:-13}"
 var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 var_tun="${var_tun:-1}"
+
+export var_pangolin_url="${var_pangolin_url:-}"
+export var_pangolin_email="${var_pangolin_email:-}"
 
 header_info "$APP"
 variables
@@ -58,7 +63,7 @@ function update_script() {
 
     msg_info "Updating Pangolin"
     cd /opt/pangolin
-    $STD npm ci
+    $STD npm ci --allow-remote=all
     $STD npm run set:pg
     $STD npm run set:oss
     rm -rf server/private
